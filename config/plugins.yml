@@ -1,6 +1,6 @@
-# List of plugins to screenshot. Each entry points at a local path or
-# git URL; the tool reads each plugin's own config/screenshots.yml to
-# know what to capture.
+# Plugins for local-development screenshot runs. NOT used by CI - the
+# reusable GitHub Actions workflow takes the plugin via inputs from
+# the calling repo. See README.md for the CI flow.
 
 plugins:
   - id: discourse-itinerary

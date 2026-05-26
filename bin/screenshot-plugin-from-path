@@ -1,0 +1,28 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Entry point for the reusable GitHub Actions workflow. Each plugin's
+# CI clones itself, then invokes this with an explicit path so we
+# don't have to maintain a central list of plugins.
+#
+# Usage:
+#   bin/screenshot-plugin-from-path --path /abs/path/to/plugin --id discourse-itinerary
+
+require "optparse"
+
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+require "plugin_screenshots"
+
+options = { path: nil, id: nil }
+OptionParser
+  .new do |opts|
+    opts.banner = "Usage: bin/screenshot-plugin-from-path --path PATH --id ID"
+    opts.on("--path PATH", "Absolute path to the plugin source") { |v| options[:path] = v }
+    opts.on("--id ID", "Plugin slug, used as output subdirectory") { |v| options[:id] = v }
+  end
+  .parse!
+
+abort "missing --path" unless options[:path]
+abort "missing --id" unless options[:id]
+
+PluginScreenshots.run_from_path(plugin_id: options[:id], plugin_dir: options[:path])
