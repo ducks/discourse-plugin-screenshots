@@ -2,20 +2,25 @@
 # frozen_string_literal: true
 
 require "optparse"
+require "yaml"
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 require "plugin_screenshots"
 
-options = { plugin: nil }
+options = { plugin: nil, all: false }
 OptionParser
   .new do |opts|
-    opts.banner = "Usage: bin/screenshot-plugins --plugin <id>"
-    opts.on("--plugin ID", "Plugin id from config/plugins.yml (required for v0)") do |v|
-      options[:plugin] = v
-    end
+    opts.banner = "Usage: bin/screenshot-plugins (--plugin <id> | --all)"
+    opts.on("--plugin ID", "Plugin id from config/plugins.yml") { |v| options[:plugin] = v }
+    opts.on("--all", "Run every plugin in config/plugins.yml") { options[:all] = true }
   end
   .parse!
 
-abort "missing --plugin" unless options[:plugin]
-
-PluginScreenshots.run(plugin_id: options[:plugin])
+if options[:all]
+  ids = YAML.load_file(PluginScreenshots::CONFIG_PATH).fetch("plugins").map { |p| p.fetch("id") }
+  ids.each { |id| PluginScreenshots.run(plugin_id: id) }
+elsif options[:plugin]
+  PluginScreenshots.run(plugin_id: options[:plugin])
+else
+  abort "missing --plugin or --all"
+end

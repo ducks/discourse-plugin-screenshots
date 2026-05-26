@@ -1,0 +1,70 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Installs every plugin listed in config/plugins.yml into a Discourse
+# checkout so the screenshot run can find them under plugins/<id>.
+#
+# Usage:
+#   bin/install-plugins --discourse /path/to/discourse
+#
+# For 'local' sources, symlinks the path into Discourse's plugins/
+# directory.
+#
+# For 'git' sources, clones the repo into Discourse's plugins/ dir
+# directly. Used in CI where there is no local checkout to symlink.
+
+require "fileutils"
+require "open3"
+require "optparse"
+require "yaml"
+
+options = { discourse: nil }
+OptionParser
+  .new do |opts|
+    opts.banner = "Usage: bin/install-plugins --discourse PATH"
+    opts.on("--discourse PATH", "Path to a Discourse checkout") { |v| options[:discourse] = v }
+  end
+  .parse!
+
+abort "missing --discourse" unless options[:discourse]
+abort "Discourse path does not exist: #{options[:discourse]}" unless Dir.exist?(options[:discourse])
+
+config_path = File.expand_path("../config/plugins.yml", __dir__)
+plugins = YAML.load_file(config_path).fetch("plugins")
+
+plugins_dir = File.join(options[:discourse], "plugins")
+FileUtils.mkdir_p(plugins_dir)
+
+def run!(*args)
+  out, status = Open3.capture2e(*args)
+  raise "command failed: #{args.inspect}\n#{out}" unless status.success?
+  out
+end
+
+plugins.each do |entry|
+  id = entry.fetch("id")
+  source = entry.fetch("source")
+  dest = File.join(plugins_dir, id)
+
+  if File.exist?(dest) || File.symlink?(dest)
+    puts "[install-plugins] #{id}: already present at #{dest}, skipping"
+    next
+  end
+
+  case source.fetch("type")
+  when "local"
+    src = source.fetch("path")
+    FileUtils.ln_s(src, dest)
+    puts "[install-plugins] #{id}: symlinked #{src} -> #{dest}"
+  when "git"
+    url = source.fetch("url")
+    ref = source["ref"]
+    args = ["git", "clone", "--depth", "1"]
+    args += ["--branch", ref] if ref
+    args += [url, dest]
+    run!(*args)
+    puts "[install-plugins] #{id}: cloned #{url} -> #{dest}"
+  else
+    abort "unsupported source type for #{id}: #{source["type"].inspect}"
+  end
+end

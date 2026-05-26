@@ -34,14 +34,37 @@ module PluginScreenshots
     entry
   end
 
+  # Returns the on-disk path to the plugin source. For 'local' it's
+  # already on the filesystem. For 'git' we clone (or pull) the URL
+  # into ./tmp/plugins/<id>/ so subsequent runs in the same workspace
+  # are fast.
   def plugin_path(entry)
     source = entry.fetch("source")
     case source.fetch("type")
     when "local"
       source.fetch("path")
+    when "git"
+      clone_or_update(entry.fetch("id"), source.fetch("url"), source["ref"])
     else
-      raise "v0 only supports local source; got #{source["type"].inspect}"
+      raise "unsupported plugin source type: #{source["type"].inspect}"
     end
+  end
+
+  def clone_or_update(id, url, ref)
+    dest = File.expand_path("../tmp/plugins/#{id}", __dir__)
+    FileUtils.mkdir_p(File.dirname(dest))
+
+    if Dir.exist?(File.join(dest, ".git"))
+      Open3.popen2e("git", "-C", dest, "fetch", "--depth", "1") { |*, w| w.value }
+      Open3.popen2e("git", "-C", dest, "reset", "--hard", ref || "FETCH_HEAD") { |*, w| w.value }
+    else
+      args = ["git", "clone", "--depth", "1"]
+      args += ["--branch", ref] if ref
+      args += [url, dest]
+      Open3.popen2e(*args) { |*, w| w.value }
+    end
+
+    dest
   end
 
   # Reads the plugin's own screenshot manifest.
@@ -51,13 +74,19 @@ module PluginScreenshots
     YAML.load_file(path)
   end
 
-  # Runs the capture system spec inside the Discourse repo. Passes the
-  # plugin + manifest path through env vars so the spec knows what to
-  # do; the spec lives in this repo and gets symlinked into Discourse
-  # for the run.
+  # Looks up the plugin in config/plugins.yml, resolves its on-disk
+  # path (cloning if necessary), and runs the capture. Used by the
+  # local CLI workflow.
   def run(plugin_id:)
     entry = plugin_config(plugin_id)
     plugin_dir = plugin_path(entry)
+    run_from_path(plugin_id: plugin_id, plugin_dir: plugin_dir)
+  end
+
+  # Runs the capture for a plugin whose on-disk path is already known.
+  # Used by the reusable GitHub Actions workflow which has already
+  # checked out the plugin into a known directory.
+  def run_from_path(plugin_id:, plugin_dir:)
     manifest = screenshot_config(plugin_dir)
 
     output_dir = File.join(PUBLIC_DIR, plugin_id)

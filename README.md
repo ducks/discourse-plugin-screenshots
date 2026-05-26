@@ -46,6 +46,73 @@ bin/screenshot-plugins --plugin discourse-itinerary
 Output lands in `public/<plugin>/<name>.png` plus a static gallery
 `public/index.html`.
 
+On NixOS you'll need a shell layered with the right Chromium runtime
+deps:
+
+```sh
+nix-shell ~/discourse/nix-shells/discourse-app.nix --run \
+  "nix-shell ~/dev/discourse-plugin-screenshots/shell.nix --run \
+    'bin/screenshot-plugins --plugin discourse-itinerary'"
+```
+
+## CI
+
+The workflow at `.github/workflows/plugin-screenshots.yml` is a
+**reusable GitHub Actions workflow**. Plugin repos opt in by adding
+a small workflow file of their own that delegates to it.
+
+Plugin's `.github/workflows/screenshots.yml`:
+
+```yaml
+name: Screenshots
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  screenshots:
+    uses: ducks/discourse-plugin-screenshots/.github/workflows/plugin-screenshots.yml@main
+```
+
+What the reusable workflow does, running inside Discourse's official
+test container so Playwright's Chromium has the system libs it needs:
+
+1. Checks out the calling plugin, this tool, and `discourse/discourse`
+2. Symlinks the plugin into `discourse/plugins/<id>`
+3. Boots the Discourse test env (Postgres + Redis + migrations)
+4. Reads the plugin's `config/screenshots.yml` for URLs and seed file
+5. Runs the seed, captures each URL, writes PNGs to `public/<id>/`
+6. Publishes `public/` to the calling plugin's GitHub Pages
+
+Each plugin maintainer owns their schedule, their gallery, and their
+CI minutes. The tool repo doesn't enumerate plugins.
+
+## config/plugins.yml (local only)
+
+For local development the tool reads `config/plugins.yml` to find a
+plugin's source path. This file is **not used by CI** - it exists so
+you can run captures against a plugin you're hacking on without
+committing anything.
+
+```yaml
+plugins:
+  - id: discourse-itinerary
+    name: Itinerary
+    source:
+      type: local
+      path: /home/me/dev/discourse-itinerary
+```
+
+`type: git` works too (clones on demand) but the reusable workflow
+already handles cloning for CI, so `git` is mainly useful for
+clean-room local runs of a plugin you haven't checked out.
+
 ## License
 
 MIT.

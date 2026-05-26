@@ -1,0 +1,172 @@
+name: Plugin screenshots (reusable)
+
+# Reusable workflow that plugin repos can call to capture their own
+# screenshots inside Discourse's official test container, then
+# publish the result to their own GitHub Pages.
+#
+# Usage from a plugin repo (.github/workflows/screenshots.yml):
+#
+#   name: Screenshots
+#   on:
+#     push:
+#       branches: [main]
+#     workflow_dispatch:
+#   permissions:
+#     contents: read
+#     pages: write
+#     id-token: write
+#   jobs:
+#     screenshots:
+#       uses: ducks/discourse-plugin-screenshots/.github/workflows/plugin-screenshots.yml@main
+#
+# The plugin must ship config/screenshots.yml at its repo root (see
+# this repo's README for the schema).
+
+on:
+  workflow_call:
+    inputs:
+      plugin-id:
+        description: "Plugin slug. Defaults to the calling repo's name."
+        required: false
+        type: string
+
+concurrency:
+  group: plugin-screenshots-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  RAILS_ENV: test
+  PGUSER: discourse
+  PGPASSWORD: discourse
+  USES_PARALLEL_DATABASES: false
+  CAPYBARA_DEFAULT_MAX_WAIT_TIME: 20
+  DBUS_SESSION_BUS_ADDRESS: "unix:path=/dev/null"
+  LOAD_PLUGINS: "1"
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    container: discourse/discourse_test:release
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Enable jemalloc
+        run: echo /usr/lib/libjemalloc.so.1 > /etc/ld.so.preload
+
+      - name: Checkout calling plugin
+        uses: actions/checkout@v6
+        with:
+          path: plugin
+
+      - name: Checkout discourse-plugin-screenshots tool
+        uses: actions/checkout@v6
+        with:
+          repository: ducks/discourse-plugin-screenshots
+          path: plugin-screenshots
+
+      - name: Checkout Discourse
+        uses: actions/checkout@v6
+        with:
+          repository: discourse/discourse
+          path: discourse
+          fetch-depth: 1
+
+      - name: Setup Git
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/plugin"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/plugin-screenshots"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/discourse"
+          git config --global user.email "ci@ci.invalid"
+          git config --global user.name "Plugin Screenshots CI"
+
+      - name: Resolve plugin id
+        id: plugin
+        env:
+          INPUT_ID: ${{ inputs.plugin-id }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -n "$INPUT_ID" ]; then
+            echo "id=$INPUT_ID" >> "$GITHUB_OUTPUT"
+          else
+            echo "id=${REPO##*/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Symlink plugin into Discourse
+        run: ln -s "$GITHUB_WORKSPACE/plugin" "discourse/plugins/${{ steps.plugin.outputs.id }}"
+
+      - name: Start Redis
+        working-directory: discourse
+        run: redis-server /etc/redis/redis.conf &
+
+      - name: Start Postgres
+        working-directory: discourse
+        run: |
+          chown -R postgres /var/run/postgresql
+          sudo -E -u postgres script/start_test_db.rb
+          sudo -u postgres psql -c "CREATE ROLE $PGUSER LOGIN SUPERUSER PASSWORD '$PGPASSWORD';"
+
+      - name: Symlink vendor/bundle from image
+        working-directory: discourse
+        run: ln -s /var/www/discourse/vendor/bundle vendor/bundle
+
+      - name: Setup Discourse gems
+        working-directory: discourse
+        run: |
+          bundle config --local path vendor/bundle
+          bundle config --local deployment true
+          bundle config --local without development
+          bundle install --jobs $(($(nproc) - 1))
+          bundle clean
+
+      - name: Install Discourse JavaScript dependencies
+        working-directory: discourse
+        run: pnpm install --frozen-lockfile
+
+      - name: Create and migrate database
+        working-directory: discourse
+        run: |
+          bin/rake db:create
+          script/silence_successful_output bin/rake db:migrate
+
+      - name: Build Discourse assets for system specs
+        working-directory: discourse
+        run: script/assemble_ember_build.rb
+
+      - name: Install Playwright Chromium
+        working-directory: discourse
+        run: pnpm playwright install --with-deps --no-shell chromium
+
+      - name: Capture screenshots
+        working-directory: plugin-screenshots
+        env:
+          DISCOURSE_PATH: ${{ github.workspace }}/discourse
+        run: ruby bin/screenshot-plugin-from-path --path "$GITHUB_WORKSPACE/plugin" --id "${{ steps.plugin.outputs.id }}"
+
+      - name: Upload screenshot site artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: plugin-screenshots/public
+          retention-days: 2
+
+      - name: Upload raw screenshot artifact
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: plugin-screenshots-public
+          if-no-files-found: ignore
+          path: plugin-screenshots/public
+          retention-days: 2
+
+  deploy:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: capture
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
