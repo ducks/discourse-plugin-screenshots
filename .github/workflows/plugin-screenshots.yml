@@ -98,7 +98,16 @@ jobs:
 
       - name: Start Redis
         working-directory: discourse
-        run: redis-server /etc/redis/redis.conf &
+        run: |
+          RUNNER_TRACKING_ID="" redis-server /etc/redis/redis.conf --daemonize yes
+          for _ in {1..30}; do
+            if redis-cli ping | grep -qx PONG; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Redis did not become ready within 30 seconds" >&2
+          exit 1
 
       - name: Start Postgres
         working-directory: discourse
