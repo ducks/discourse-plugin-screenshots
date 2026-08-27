@@ -42,20 +42,11 @@ env:
   CAPYBARA_DEFAULT_MAX_WAIT_TIME: 20
   DBUS_SESSION_BUS_ADDRESS: "unix:path=/dev/null"
   LOAD_PLUGINS: "1"
-  DISCOURSE_REDIS_HOST: redis
 
 jobs:
   capture:
     runs-on: ubuntu-latest
     container: discourse/discourse_test:release
-    services:
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
     timeout-minutes: 45
     defaults:
       run:
@@ -132,6 +123,16 @@ jobs:
       - name: Create and migrate database
         working-directory: discourse
         run: |
+          redis-server --save "" --appendonly no &
+          redis_pid=$!
+          trap 'kill "$redis_pid" || true' EXIT
+          for _ in {1..30}; do
+            if redis-cli ping | grep -qx PONG; then
+              break
+            fi
+            sleep 1
+          done
+          redis-cli ping | grep -qx PONG
           bin/rake db:create
           script/silence_successful_output bin/rake db:migrate
 
@@ -147,7 +148,18 @@ jobs:
         working-directory: plugin-screenshots
         env:
           DISCOURSE_PATH: ${{ github.workspace }}/discourse
-        run: ruby bin/screenshot-plugin-from-path --path "$GITHUB_WORKSPACE/plugin" --id "${{ steps.plugin.outputs.id }}"
+        run: |
+          redis-server --save "" --appendonly no &
+          redis_pid=$!
+          trap 'kill "$redis_pid" || true' EXIT
+          for _ in {1..30}; do
+            if redis-cli ping | grep -qx PONG; then
+              break
+            fi
+            sleep 1
+          done
+          redis-cli ping | grep -qx PONG
+          ruby bin/screenshot-plugin-from-path --path "$GITHUB_WORKSPACE/plugin" --id "${{ steps.plugin.outputs.id }}"
 
       - name: Upload screenshot site artifact
         uses: actions/upload-pages-artifact@v4
