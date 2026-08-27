@@ -42,11 +42,20 @@ env:
   CAPYBARA_DEFAULT_MAX_WAIT_TIME: 20
   DBUS_SESSION_BUS_ADDRESS: "unix:path=/dev/null"
   LOAD_PLUGINS: "1"
+  DISCOURSE_REDIS_HOST: redis
 
 jobs:
   capture:
     runs-on: ubuntu-latest
     container: discourse/discourse_test:release
+    services:
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     timeout-minutes: 45
     defaults:
       run:
@@ -95,24 +104,6 @@ jobs:
 
       - name: Symlink plugin into Discourse
         run: ln -s "$GITHUB_WORKSPACE/plugin" "discourse/plugins/${{ steps.plugin.outputs.id }}"
-
-      - name: Start Redis
-        working-directory: discourse
-        run: |
-          mkdir -p /tmp/plugin-screenshots-redis
-          RUNNER_TRACKING_ID="" redis-server \
-            --daemonize yes \
-            --dir /tmp/plugin-screenshots-redis \
-            --save "" \
-            --appendonly no
-          for _ in {1..30}; do
-            if redis-cli ping | grep -qx PONG; then
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "Redis did not become ready within 30 seconds" >&2
-          exit 1
 
       - name: Start Postgres
         working-directory: discourse
