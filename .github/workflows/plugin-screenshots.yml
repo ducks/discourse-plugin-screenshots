@@ -99,7 +99,12 @@ jobs:
       - name: Start Redis
         working-directory: discourse
         run: |
-          RUNNER_TRACKING_ID="" redis-server /etc/redis/redis.conf --daemonize yes
+          mkdir -p /tmp/plugin-screenshots-redis
+          RUNNER_TRACKING_ID="" redis-server \
+            --daemonize yes \
+            --dir /tmp/plugin-screenshots-redis \
+            --save "" \
+            --appendonly no
           for _ in {1..30}; do
             if redis-cli ping | grep -qx PONG; then
               exit 0
